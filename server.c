@@ -1,7 +1,7 @@
 #include"socket.h"
 
 
-typedef struct
+typedef struct 
 {
     int sockfd;
     char username[50];
@@ -9,125 +9,92 @@ typedef struct
 
 User *users[MAX_USERS];
 int user_count = 0;
-
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 
-
-void broadcast_message(char *message, int sender_sock)
-{
+void broadcast_message(char *message, int sender_sock) {
     pthread_mutex_lock(&mutex);
-    
-    for (int i = 0; i < user_count; i++)
-    {
-        if (users[i]->sockfd != sender_sock) 
-        {
+    for (int i = 0; i < user_count; i++) {
+        if (users[i]->sockfd != sender_sock) {
             send(users[i]->sockfd, message, strlen(message), 0);
         }
     }
     pthread_mutex_unlock(&mutex);
 }
 
-
-int authenticate_user(int client_sock) 
-{
-    char username[50], password[50];
+// Function to authenticate users
+int authenticate_user(int client_sock, char *username) {
+    char password[50], buffer[MAX_BUFFER];
     FILE *user_db = fopen("users.txt", "r");
-    
-    if (user_db == NULL) 
-    {
-        perror("Database not found");
+    if (!user_db) {
+        perror("Error opening users.txt");
         return 0;
     }
 
     send(client_sock, "Enter username: ", 17, 0);
     recv(client_sock, username, 50, 0);
+    username[strcspn(username, "\n")] = '\0'; // Remove newline
 
     send(client_sock, "Enter password: ", 17, 0);
     recv(client_sock, password, 50, 0);
+    password[strcspn(password, "\n")] = '\0';
 
     char db_username[50], db_password[50];
-    
     int authenticated = 0;
-    
-    while (fscanf(user_db, "%s %s", db_username, db_password) != EOF)
-    {
-        if (strcmp(username, db_username) == 0 && strcmp(password, db_password) == 0)
-        {
+    while (fscanf(user_db, "%s %s", db_username, db_password) != EOF) {
+        if (strcmp(username, db_username) == 0 && strcmp(password, db_password) == 0) {
             authenticated = 1;
             break;
         }
     }
     fclose(user_db);
 
-    if (authenticated) 
-    {
+    if (authenticated) {
         send(client_sock, "Login successful\n", 17, 0);
         return 1;
-    }
-    
-    else 
-     {
+    } else {
         send(client_sock, "Invalid username or password\n", 30, 0);
         return 0;
-     } 
+    }
 }
 
-
-void *handle_client(void *arg) 
-{
+// Function to handle a single client
+void *handle_client(void *arg) {
     int client_sock = *(int *)arg;
-    char buffer[MAX_BUFFER];
-    
-    char welcome_msg[] = "Welcome to the chat room!";
-    char user_list_msg[MAX_BUFFER];
+    char buffer[MAX_BUFFER], username[50];
 
-
-    if (!authenticate_user(client_sock)) 
-    {
+    if (!authenticate_user(client_sock, username)) {
         close(client_sock);
         return NULL;
     }
 
     pthread_mutex_lock(&mutex);
-    
-    users[user_count] = (User *)malloc(sizeof(User));
-    users[user_count]->sockfd = client_sock;
-    
-    recv(client_sock, users[user_count]->username, 50, 0);
-    user_count++;
-    
+    User *new_user = (User *)malloc(sizeof(User));
+    new_user->sockfd = client_sock;
+    strcpy(new_user->username, username);
+    users[user_count++] = new_user;
     pthread_mutex_unlock(&mutex);
 
-    send(client_sock, welcome_msg, sizeof(welcome_msg), 0);
-    
-    snprintf(user_list_msg, MAX_BUFFER, "Online users: ");
-    
-    for (int i = 0; i < user_count; i++) 
-    {
-        strcat(user_list_msg, users[i]->username);
-        strcat(user_list_msg, " ");
-    }
-    
-    send(client_sock, user_list_msg, strlen(user_list_msg), 0);
+    char welcome_msg[MAX_BUFFER];
+    snprintf(welcome_msg, sizeof(welcome_msg), "%s joined the chat\n", username);
+    broadcast_message(welcome_msg, client_sock);
 
-    // Listen for messages from the client
     while (1) {
         int n = recv(client_sock, buffer, MAX_BUFFER, 0);
-        if (n <= 0) {
-            break;
-        }
+        if (n <= 0) break;
         buffer[n] = '\0';
-        broadcast_message(buffer, client_sock);
+        if (strcmp(buffer, "exit\n") == 0) break;
+
+        char message[MAX_BUFFER];
+        snprintf(message, sizeof(message), "%s: %s", username, buffer);
+        broadcast_message(message, client_sock);
     }
 
+    close(client_sock);
     pthread_mutex_lock(&mutex);
-    for (int i = 0; i < user_count; i++) 
-    {
-        if (users[i]->sockfd == client_sock)
-         {
+    for (int i = 0; i < user_count; i++) {
+        if (users[i]->sockfd == client_sock) {
             free(users[i]);
-            for (int j = i; j < user_count - 1; j++)
-            {
+            for (int j = i; j < user_count - 1; j++) {
                 users[j] = users[j + 1];
             }
             user_count--;
@@ -136,51 +103,28 @@ void *handle_client(void *arg)
     }
     pthread_mutex_unlock(&mutex);
 
-    close(client_sock);
+    snprintf(buffer, sizeof(buffer), "%s left the chat\n", username);
+    broadcast_message(buffer, -1);
     return NULL;
 }
 
-int main()
-{
+int main() {
     int server_sock, client_sock;
-    
     struct sockaddr_in server_addr, client_addr;
     socklen_t client_addr_len = sizeof(client_addr);
-    
-    server_sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (server_sock < 0) 
-    {
-        perror("Socket creation failed");
-        exit(1);
-    }
 
+    server_sock = socket(AF_INET, SOCK_STREAM, 0);
     server_addr.sin_family = AF_INET;
     server_addr.sin_addr.s_addr = INADDR_ANY;
     server_addr.sin_port = htons(PORT);
 
-    if (bind(server_sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
-    {
-        perror("Binding failed");
-        exit(1);
-    }
+    bind(server_sock, (struct sockaddr *)&server_addr, sizeof(server_addr));
+    listen(server_sock, 5);
 
-    if (listen(server_sock, 5) < 0) 
-    {
-        perror("Listen failed");
-        exit(1);
-    }
+    printf("Server started on port %d...\n", PORT);
 
-    printf("Server listening on port %d...\n", PORT);
-
-    while (1) 
-    {
+    while (1) {
         client_sock = accept(server_sock, (struct sockaddr *)&client_addr, &client_addr_len);
-        if (client_sock < 0) 
-        {
-            perror("Accept failed");
-            continue;
-        }
-
         pthread_t client_thread;
         pthread_create(&client_thread, NULL, handle_client, (void *)&client_sock);
     }
@@ -188,3 +132,4 @@ int main()
     close(server_sock);
     return 0;
 }
+
