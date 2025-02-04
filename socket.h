@@ -12,5 +12,6 @@
 
 #define PORT 8000
 #define MAX_USERS 10
+#define MAX_BUFFER 1024
 
 
