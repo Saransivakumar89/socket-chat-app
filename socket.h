@@ -1,0 +1,12 @@
+//Headers
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <pthread.h>
+
+#define PORT 8000
+#define MAX_USERS 10
+#define IP "127.0.0.1"
+
